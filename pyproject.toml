@@ -1,0 +1,70 @@
+[project]
+authors = [{name = "Riccardo Gibello", email = "riccardo.gibello@polimi.it"}]
+dependencies = [
+    "dspy>=3.0.2,<4",
+    "spacy>=3.8.11,<4",
+    "pydantic>=2.0,<3",
+    "numpy>=1.26,<2.0",
+]
+name = "nyha_temporal_identification"
+requires-python = ">=3.12, <3.13"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.pypi-options]
+index-url = "https://pypi.org/simple"
+index-strategy = "unsafe-best-match"
+
+[tool.pixi.dependencies]
+python = ">=3.12,<3.13"
+numpy = ">=1.26,<2.0"        # pinned in conda to prevent datasets pulling 2.4.3
+matplotlib = ">=3.10.8,<4"
+setuptools = ">=77.0.3,<80"
+nltk = ">=3.9.4,<4"
+scikit-learn = ">=1.8.0,<2"
+transformers = ">=4.55.2,<5"
+fsspec = ">=2023.1.0,<2025"
+ipykernel = ">=7.3.0,<8"
+seaborn = ">=0.13.2,<0.14"
+
+[tool.pixi.pypi-dependencies]
+nyha_temporal_identification = { path = ".", editable = true }
+dspy = ">=3.0.2,<4"
+spacy = ">=3.8.11,<4"
+pydantic = ">=2.0,<3"
+polars = ">=1.39.2,<2"
+datasets = ">=3,<4"
+scipy = ">=1.0,<2"
+pyarrow = ">=14,<16"
+huggingface-hub = ">=0.14.0,<2"
+pytest = ">=8.0,<9"
+
+[tool.pixi.tasks]
+clean_tables = "python main.py --command clean_tables --data-folder {data_folder} --config configs/config_cpu.toml"
+cluster_operations = "python main.py --command cluster_operations --data-folder {data_folder} --config configs/config_gpu.toml"
+extract_nyha = "python main.py --command extract_nyha --data-folder {data_folder} --config configs/config_cpu.toml"
+test = "pytest tests/ -v"
+
+[tool.pixi.feature.cpu.pypi-dependencies]
+torch = { version = ">=2.0,<3", index = "https://download.pytorch.org/whl/cpu" }
+
+[tool.pixi.feature.gpu.system-requirements]
+cuda = "12"
+
+[tool.pixi.feature.gpu.dependencies]
+cuda-toolkit = ">=12.0,<13"
+
+[tool.pixi.feature.gpu.pypi-dependencies]
+vllm = ">=0.11,<0.12"
+transformers = ">=4.55.2,<5"
+
+[tool.pixi.environments]
+default = { features = ["cpu"], solve-group = "cpu-group" }
+gpu = { features = ["gpu"], solve-group = "gpu-group" }

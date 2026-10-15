@@ -1,0 +1,40 @@
+commands = ["annotate_training_nyha_mentions"]
+seed = 42
+use_identification = false
+use_windowed_classification_context = true
+pseudonymise = true
+hf_token_file = "./.hf_token"
+# Document-level bootstrap resamples for test-report confidence intervals; 0 disables.
+n_bootstrap = 1000
+# Re-inject dropped spaCy candidates as current/failsafe so the downstream masker
+# never leaks a current value. Set true on the annotate_training_nyha_mentions path.
+failsafe_dropped_current = false
+# Conflict policy when failsafe_dropped_current=true:
+#   "balanced"     — conflict only among confident (source=llm) current mentions
+#   "conservative" — conflict among all currents incl. failsafe
+#   "off"          — never flag
+failsafe_note_drop_policy = "balanced"
+
+[dspy_pipeline]
+task_lm = "RedHatAI/gemma-3-27b-it-quantized.w4a16"
+optimiser = "both"
+vllm_node_file = "logs/vllm_node_placeholder.txt"
+num_threads = 24
+max_demo_tokens = 2975
+max_tokens = 1536
+identify_max_tokens = 2048
+prompt_lm_max_tokens = 8000
+max_eval_tokens = 2500
+repetition_penalty = 1.1
+mipro_num_candidates = 10
+mipro_num_trials = 15
+dspy_demo_pool_size = 50
+dspy_opt_val_size = 300
+# Labeled demos disabled: they come from gold (evidence="", no reasoning) and as
+# few-shot exemplars under the ChainOfThought "never leave evidence empty" signature
+# they teach the forbidden empty-evidence/no-CoT output. Bootstrapped demos carry CoT.
+bootstrap_max_bootstrapped_demos = 4
+bootstrap_max_labeled_demos = 0
+mipro_max_bootstrapped_demos = 4
+mipro_max_labeled_demos = 0
+mipro_view_data_batch_size = 10

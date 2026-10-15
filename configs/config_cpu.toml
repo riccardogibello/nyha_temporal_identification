@@ -1,0 +1,13 @@
+commands = ["train_baselines"]
+baseline_feature_modes = ["base_text", "text"]
+seed = 42
+use_identification = false
+use_windowed_classification_context = true
+pseudonymise = true
+hf_token_file = "./.hf_token"
+# Document-level bootstrap resamples for test-report confidence intervals; 0 disables.
+n_bootstrap = 1000
+
+[dspy_pipeline]
+task_lm = "google/gemma-3-12b-it"
+optimiser = "both"

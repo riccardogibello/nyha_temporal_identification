@@ -1,0 +1,29 @@
+# NYHA Extraction Pipeline — Dependencies
+# Install with: pip install -r requirements.txt
+#
+# NOTE: if you are using pixi, you do not need this file for environment
+# management — pixi.toml is the source of truth. This file exists for
+# contexts where pixi is not available (CI, Docker, plain pip installs).
+# Keep it in sync with [tool.pixi.dependencies] in pyproject.toml.
+
+# Core — must match pyproject.toml [project] dependencies
+dspy>=3.0.2,<4           # DSPy framework (MIPROv2 + BootstrapFewShot)
+                         # NOTE: old package name was dspy-ai; now just dspy
+pydantic>=2.0,<3         # Data models + validation
+numpy>=1.26,<3           # Numerical arrays (nyha_parsing.py nyha_vector)
+
+# spaCy (for nyha_component pre-processing and date linkage)
+spacy>=3.8.11,<4
+# Blank pipeline is sufficient — nyha_component uses regex only.
+# If tokenisation of Dutch notes is needed:
+#   python -m spacy download nl_core_news_sm
+
+# vLLM (install separately with CUDA support on your inference server)
+# See: https://docs.vllm.ai/en/latest/getting_started/installation.html
+# vllm>=0.6.0
+
+# Optional: embedding-based distribution checks (Stage 5 augmentation pipeline)
+# transformers>=4.55.2,<5
+# torch>=2.0.0
+# scikit-learn>=1.4.0
+# scipy>=1.12.0
