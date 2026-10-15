@@ -2,14 +2,14 @@ import os
 from pathlib import Path
 
 from nyha_temporal_identification.constants import (
-    CLEANED_TABLES_FOLDER_NAME,
-    NOTES_DF_FIRST_FILTER_FILE_NAME,
-    OLD_ID_COLUMN,
     PSEUDONYMISATION_FOLDER_NAME,
     TEMPORAL_STATUS_PREDICTION_FOLDER_NAME,
     ZS_COMPLETE_FOLDER_NAME,
 )
-from nyha_temporal_identification.data_handling.data_loading import load_dataset
+from nyha_temporal_identification.data_handling.data_loading import (
+    load_dataset,
+    load_whitelisted_note_ids,
+)
 from nyha_temporal_identification.dspy_logic.checkpoint import PipelineCheckpoint
 from nyha_temporal_identification.dspy_logic.modules import (
     NYHAExtractor,
@@ -35,7 +35,6 @@ from nyha_temporal_identification.utils.general import (
     Config,
     parse_args,
 )
-from nyha_temporal_identification.utils.io import load_parquet_dataset_to_polars
 
 
 def _resolve_saved_extractor_path(
@@ -80,13 +79,7 @@ def main() -> None:
         ):
             documents = load_dataset(
                 data_folder_path=args.data_folder,
-                whitelisted_note_ids=load_parquet_dataset_to_polars(
-                    os.path.join(
-                        args.data_folder,
-                        CLEANED_TABLES_FOLDER_NAME,
-                        NOTES_DF_FIRST_FILTER_FILE_NAME,
-                    )
-                )[OLD_ID_COLUMN].to_list()
+                whitelisted_note_ids=load_whitelisted_note_ids(args.data_folder)
                 if command == ANNOTATE_TRAINING_NYHA_MENTIONS_COMMAND_NAME
                 else None,
                 is_inference=command == ANNOTATE_TRAINING_NYHA_MENTIONS_COMMAND_NAME,

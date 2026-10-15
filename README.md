@@ -140,8 +140,12 @@ Each parquet file must contain these columns:
 
 Columns `PatientNotitieId` (= the `<note_id>` part of `old_id`) and
 `PatientContactId`. Only notes that appear in this mapping are kept. The mapping
-is also used to group notes by patient, so that train/val/test splits never share
-a patient.
+is also used to group notes for the train/val/test split: notes from the same
+patient contact always land in the same split. When the internal upstream tables
+that link contacts to patients are available, the split groups by patient
+instead, so splits never share a patient. With only the public inputs, one
+patient with several contacts can still appear in more than one split. A warning
+is logged when this fallback is used.
 
 ### Pseudonymisation lookup data: `pseudonymisation/`
 

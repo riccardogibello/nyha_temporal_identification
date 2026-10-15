@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from collections import defaultdict
@@ -38,10 +39,28 @@ from nyha_temporal_identification.extraction.date_parsing import parse_flexible_
 from nyha_temporal_identification.utils.io import load_parquet_dataset_to_polars
 
 
-def integrate_patient_contact_information(
-    data_folder_path: str,
-    note_df: pl.DataFrame,
-) -> pl.DataFrame:
+_warned_missing_tables: set[str] = set()
+
+
+def _warn_missing_table(path: str, consequence: str) -> None:
+    """Log a warning for a missing optional input table, once per path."""
+    if path in _warned_missing_tables:
+        return
+    _warned_missing_tables.add(path)
+    logging.warning(f"Optional table not found: {path} — {consequence}")
+
+
+def _cleaned_table_path(data_folder_path: str, table_name: str) -> str:
+    return os.path.join(data_folder_path, CLEANED_TABLES_FOLDER_NAME, table_name)
+
+
+def load_note_contact_mapping(data_folder_path: str) -> pl.DataFrame:
+    """
+    Load the note → patient-contact mapping from the old tables, with both ID
+    columns cast to string and null / "N/A" rows dropped.
+
+    Returns an empty DataFrame with the same two columns if the mapping is missing.
+    """
     note_id_patient_contact_df = load_parquet_dataset_to_polars(
         os.path.join(
             data_folder_path,
@@ -50,6 +69,10 @@ def integrate_patient_contact_information(
         ),
         columns=["PatientNotitieId", "PatientContactId"],
     )
+    if note_id_patient_contact_df.is_empty():
+        return pl.DataFrame(
+            schema={"PatientNotitieId": pl.Utf8, "PatientContactId": pl.Utf8}
+        )
     note_id_patient_contact_df = note_id_patient_contact_df.drop_nulls(
         subset=["PatientNotitieId", "PatientContactId"]
     )
@@ -59,10 +82,17 @@ def integrate_patient_contact_information(
         pl.col("PatientContactId").cast(pl.Utf8),
     )
     # Drop any row containing N/A strings in the PatientNotitieId or PatientContactId columns
-    note_id_patient_contact_df = note_id_patient_contact_df.filter(
+    return note_id_patient_contact_df.filter(
         ~(pl.col("PatientNotitieId").str.contains("N/A", literal=True))
         & ~(pl.col("PatientContactId").str.contains("N/A", literal=True))
     )
+
+
+def integrate_patient_contact_information(
+    data_folder_path: str,
+    note_df: pl.DataFrame,
+) -> pl.DataFrame:
+    note_id_patient_contact_df = load_note_contact_mapping(data_folder_path)
     # Cast the ID_COLUMN to string to match the PatientNotitieId column
     note_df = note_df.with_columns(pl.col(ID_COLUMN).cast(pl.Utf8))
     # Perform an inner join, so that we only keep the notes that have a corresponding
@@ -73,33 +103,33 @@ def integrate_patient_contact_information(
         right_on="PatientNotitieId",
         how="inner",
     )
+
+    # The cleaned tables come from an internal upstream step and may be absent:
+    # in that case keep the notes and leave the enrichment columns null
+    patient_contact_path = _cleaned_table_path(
+        data_folder_path, PATIENT_CONTACT_FOLDER_NAME
+    )
+    if not os.path.exists(patient_contact_path):
+        _warn_missing_table(
+            patient_contact_path,
+            "patient_contact_id and specialty_name will be null",
+        )
+        return note_df.drop("PatientContactId").with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias(PATIENT_CONTACT_ID_COLUMN),
+            pl.lit(None, dtype=pl.Utf8).alias(HAS_SPECIALTY_ID_COLUMN),
+            pl.lit(None, dtype=pl.Utf8).alias(SPECIALTY_ID_COLUMN),
+            pl.lit(None, dtype=pl.Utf8).alias(SPECIALTY_NAME_COLUMN),
+        )
+
     # Get a list of the unique patient contact identifiers from the note dataframe
     unique_patient_contact_ids = note_df["PatientContactId"].unique().to_list()
     # Use this to load the patient contact information only for the relevant patient contacts,
     # to avoid memory issues
     patient_contact_df = load_parquet_dataset_to_polars(
-        os.path.join(
-            data_folder_path,
-            CLEANED_TABLES_FOLDER_NAME,
-            PATIENT_CONTACT_FOLDER_NAME,
-        ),
+        patient_contact_path,
         filters=[
             pl.col(OLD_PATIENT_CONTACT_ID_COLUMN).is_in(unique_patient_contact_ids)
         ],
-    )
-    has_specialty_df = load_parquet_dataset_to_polars(
-        os.path.join(
-            data_folder_path,
-            CLEANED_TABLES_FOLDER_NAME,
-            HAS_SPECIALTY_FOLDER_NAME,
-        ),
-    )
-    specialty_df = load_parquet_dataset_to_polars(
-        os.path.join(
-            data_folder_path,
-            CLEANED_TABLES_FOLDER_NAME,
-            SPECIALTY_FOLDER_NAME,
-        ),
     )
 
     # Join the table on the old patient contact and get the new patient contact ID
@@ -119,6 +149,24 @@ def integrate_patient_contact_information(
         right_on=OLD_PATIENT_CONTACT_ID_COLUMN,
         how="left",
     ).drop("PatientContactId")
+
+    has_specialty_path = _cleaned_table_path(
+        data_folder_path, HAS_SPECIALTY_FOLDER_NAME
+    )
+    specialty_path = _cleaned_table_path(data_folder_path, SPECIALTY_FOLDER_NAME)
+    missing_specialty_paths = [
+        p for p in (has_specialty_path, specialty_path) if not os.path.exists(p)
+    ]
+    if missing_specialty_paths:
+        for path in missing_specialty_paths:
+            _warn_missing_table(path, "specialty_name will be null")
+        return note_df.with_columns(
+            pl.lit(None, dtype=pl.Utf8).alias(SPECIALTY_ID_COLUMN),
+            pl.lit(None, dtype=pl.Utf8).alias(SPECIALTY_NAME_COLUMN),
+        )
+
+    has_specialty_df = load_parquet_dataset_to_polars(has_specialty_path)
+    specialty_df = load_parquet_dataset_to_polars(specialty_path)
     note_df = note_df.join(
         has_specialty_df.select(
             [

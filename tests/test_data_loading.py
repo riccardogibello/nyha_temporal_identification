@@ -1,8 +1,29 @@
-"""Tests for data_handling/data_loading.py — patient_grouped_split."""
+"""Tests for data_handling/data_loading.py — patient_grouped_split,
+load_note_patient_groups (incl. missing-table fallbacks), load_whitelisted_note_ids."""
 
+import logging
+
+import polars as pl
 import pytest
 
-from nyha_temporal_identification.data_handling.data_loading import patient_grouped_split
+from nyha_temporal_identification.constants import (
+    ALL_NOTES_METADATA_PARQUET_FILE_NAME,
+    CLEANED_TABLES_FOLDER_NAME,
+    CONTACT_NOTE_TABLE_NAME,
+    FREE_TEXT_FOLDER_NAME,
+    ID_COLUMN,
+    NOTES_DF_FIRST_FILTER_FILE_NAME,
+    OLD_ID_COLUMN,
+    OLD_TABLES_FOLDER_NAME,
+    PATIENT_CONTACT_FOLDER_NAME,
+    PATIENT_CONTACT_ID_COLUMN,
+    PSEUDO_PATIENT_ID_COLUMN,
+)
+from nyha_temporal_identification.data_handling.data_loading import (
+    load_note_patient_groups,
+    load_whitelisted_note_ids,
+    patient_grouped_split,
+)
 from nyha_temporal_identification.data_model.dspy_model import NYHANote
 
 
@@ -119,3 +140,89 @@ def test_singleton_groups_preserve_all_docs():
     train, val, test = patient_grouped_split(docs, note_to_group, seed=0)
     all_ids = {d.old_note_id for d in train + val + test}
     assert all_ids == set(note_ids)
+
+
+# ── load_note_patient_groups / load_whitelisted_note_ids ──────────────────────
+
+
+def _write_contact_mapping(tmp_path, rows: dict[int, int]) -> None:
+    old_tables = tmp_path / OLD_TABLES_FOLDER_NAME
+    old_tables.mkdir(exist_ok=True)
+    pl.DataFrame(
+        {
+            "PatientNotitieId": list(rows.keys()),
+            "PatientContactId": list(rows.values()),
+        }
+    ).write_parquet(old_tables / CONTACT_NOTE_TABLE_NAME)
+
+
+def _write_pseudo_patient_inputs(tmp_path) -> None:
+    free_text = tmp_path / OLD_TABLES_FOLDER_NAME / FREE_TEXT_FOLDER_NAME
+    free_text.mkdir(parents=True, exist_ok=True)
+    pl.DataFrame(
+        {OLD_ID_COLUMN: ["1", "2", "3"], PATIENT_CONTACT_ID_COLUMN: [100, 200, 300]}
+    ).write_parquet(free_text / ALL_NOTES_METADATA_PARQUET_FILE_NAME)
+    patient_contact = tmp_path / CLEANED_TABLES_FOLDER_NAME / PATIENT_CONTACT_FOLDER_NAME
+    patient_contact.mkdir(parents=True)
+    # Contacts 100 and 200 belong to the same patient
+    pl.DataFrame(
+        {ID_COLUMN: [100, 200, 300], PSEUDO_PATIENT_ID_COLUMN: [7, 7, 8]}
+    ).write_parquet(patient_contact / "part-0.parquet")
+
+
+def test_patient_groups_use_pseudo_patient_when_available(tmp_path):
+    _write_pseudo_patient_inputs(tmp_path)
+    groups = load_note_patient_groups(str(tmp_path), ["1", "2", "3", "4"])
+    assert groups == {"1": "7", "2": "7", "3": "8", "4": "4"}
+
+
+def test_patient_groups_fall_back_to_raw_contact(tmp_path, caplog):
+    # Note 2 maps to two contacts: the smallest one wins
+    old_tables = tmp_path / OLD_TABLES_FOLDER_NAME
+    old_tables.mkdir()
+    pl.DataFrame(
+        {
+            "PatientNotitieId": [1, 2, 2, 3],
+            "PatientContactId": [10, 30, 10, 20],
+        }
+    ).write_parquet(old_tables / CONTACT_NOTE_TABLE_NAME)
+    with caplog.at_level(logging.WARNING):
+        groups = load_note_patient_groups(str(tmp_path), ["1", "2", "3", "4"])
+    assert groups == {
+        "1": "contact:10",
+        "2": "contact:10",
+        "3": "contact:20",
+        "4": "4",
+    }
+    assert "grouping notes by raw patient contact" in caplog.text
+
+
+def test_patient_groups_fall_back_when_patient_contact_dir_empty(tmp_path):
+    _write_contact_mapping(tmp_path, {1: 10, 2: 10})
+    (tmp_path / CLEANED_TABLES_FOLDER_NAME / PATIENT_CONTACT_FOLDER_NAME).mkdir(
+        parents=True
+    )
+    groups = load_note_patient_groups(str(tmp_path), ["1", "2"])
+    assert groups == {"1": "contact:10", "2": "contact:10"}
+
+
+def test_patient_groups_all_singletons_without_any_mapping(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING):
+        groups = load_note_patient_groups(str(tmp_path), ["1", "2"])
+    assert groups == {"1": "1", "2": "2"}
+    assert "every note becomes its own split group" in caplog.text
+
+
+def test_whitelisted_note_ids_loaded(tmp_path):
+    cleaned = tmp_path / CLEANED_TABLES_FOLDER_NAME
+    cleaned.mkdir()
+    pl.DataFrame({OLD_ID_COLUMN: ["1", "5"], "other": [0, 0]}).write_parquet(
+        cleaned / NOTES_DF_FIRST_FILTER_FILE_NAME
+    )
+    assert load_whitelisted_note_ids(str(tmp_path)) == ["1", "5"]
+
+
+def test_whitelisted_note_ids_missing_returns_none(tmp_path, caplog):
+    with caplog.at_level(logging.WARNING):
+        assert load_whitelisted_note_ids(str(tmp_path)) is None
+    assert NOTES_DF_FIRST_FILTER_FILE_NAME in caplog.text

@@ -244,7 +244,7 @@ class TestNoteMapIO:
 # ── End-to-end resume mode (regression for the clear-before-read bug) ─────────
 
 
-def _build_data_folder(tmp_path, n_notes=10):
+def _build_data_folder(tmp_path, n_notes=10, specialty="Cardiologie"):
     """Creates a minimal data folder: metadata parquet + DT4H note map."""
     free_text = tmp_path / OLD_TABLES_FOLDER_NAME / FREE_TEXT_FOLDER_NAME
     free_text.mkdir(parents=True)
@@ -257,7 +257,7 @@ def _build_data_folder(tmp_path, n_notes=10):
                 OLD_ID_COLUMN: str(i),
                 HAS_NYHA_MENTION_COLUMN: True,
                 HAS_INVALID_NYHA_MENTION_COLUMN: False,
-                SPECIALTY_NAME_COLUMN: "Cardiologie",
+                SPECIALTY_NAME_COLUMN: specialty,
                 TYPE_COLUMN: "Brief",
             }
         )
@@ -328,3 +328,22 @@ def test_fresh_split_runs_end_to_end(tmp_path):
     # Each annotator's zip archive was produced.
     assert os.path.exists(os.path.join(output_folder, "a_annotations.zip"))
     assert os.path.exists(os.path.join(output_folder, "b_annotations.zip"))
+
+
+def test_missing_specialty_skips_specialty_filter(tmp_path, capsys):
+    # Without the optional specialty tables, specialty_name is all-null; the
+    # cardiology filter must be skipped rather than select nothing.
+    data_folder, free_text = _build_data_folder(tmp_path, n_notes=10, specialty=None)
+    output_folder = os.path.join(free_text, INPUT_ANNOTATIONS_FOLDER_NAME)
+    args = argparse.Namespace(
+        data_folder=data_folder,
+        annotator_names=["a", "b"],
+        old_annotations_folder=None,
+        samples_per_annotator=3,
+        overlap_ratio=0.10,
+        seed=42,
+    )
+    pad.main(args)
+    assert "skipping the Cardiologie specialty filter" in capsys.readouterr().out
+    assert _annotator_ids(output_folder, "a")
+    assert _annotator_ids(output_folder, "b")

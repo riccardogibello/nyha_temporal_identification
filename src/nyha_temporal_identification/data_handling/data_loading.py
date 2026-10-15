@@ -17,6 +17,7 @@ from nyha_temporal_identification.constants import (
     FORMATTED_FOLDER_NAME,
     FREE_TEXT_FOLDER_NAME,
     ID_COLUMN,
+    NOTES_DF_FIRST_FILTER_FILE_NAME,
     OLD_ID_COLUMN,
     OLD_TABLES_FOLDER_NAME,
     PATIENT_CONTACT_FOLDER_NAME,
@@ -32,6 +33,7 @@ from nyha_temporal_identification.data_model.dspy_model import (
     NYHANote,
     nyha_mention_from_json_dict,
 )
+from nyha_temporal_identification.extraction.note import load_note_contact_mapping
 
 
 def load_dataset(
@@ -130,21 +132,34 @@ def load_dataset(
     return documents
 
 
-def load_note_patient_groups(
-    data_folder_path: str,
+def load_whitelisted_note_ids(data_folder_path: str) -> Optional[list[str]]:
+    """Load the note-ID whitelist used by ``annotate_training_nyha_mentions``.
+
+    Returns ``None`` (no whitelist: every extracted note is used) when the
+    whitelist table produced by the internal upstream cleaning step is missing.
+    """
+    whitelist_path = os.path.join(
+        data_folder_path,
+        CLEANED_TABLES_FOLDER_NAME,
+        NOTES_DF_FIRST_FILTER_FILE_NAME,
+    )
+    if not os.path.exists(whitelist_path):
+        logging.warning(
+            f"Note whitelist not found: {whitelist_path} — "
+            "running inference on all extracted notes"
+        )
+        return None
+    return pl.read_parquet(whitelist_path, columns=[OLD_ID_COLUMN])[
+        OLD_ID_COLUMN
+    ].to_list()
+
+
+def _groups_from_pseudo_patient(
+    metadata_path: str,
+    patient_contact_folder_path: str,
     note_ids: list[str],
 ) -> dict[str, str]:
-    """Map each note ID to a patient group ID (pseudo_patient_id).
-
-    Unmapped notes fall back to their own note_id as a singleton group so
-    they are never dropped from the split.
-    """
-    metadata_path = os.path.join(
-        data_folder_path,
-        OLD_TABLES_FOLDER_NAME,
-        FREE_TEXT_FOLDER_NAME,
-        ALL_NOTES_METADATA_PARQUET_FILE_NAME,
-    )
+    """Resolve ``old_note_id → patient_contact_id → pseudo_patient_id``."""
     metadata = (
         pl.scan_parquet(metadata_path)
         .select([OLD_ID_COLUMN, PATIENT_CONTACT_ID_COLUMN])
@@ -157,14 +172,8 @@ def load_note_patient_groups(
         metadata[PATIENT_CONTACT_ID_COLUMN].drop_nulls().unique().to_list()
     )
 
-    patient_contact_path = os.path.join(
-        data_folder_path,
-        CLEANED_TABLES_FOLDER_NAME,
-        PATIENT_CONTACT_FOLDER_NAME,
-        "*.parquet",
-    )
     patient_contact = (
-        pl.scan_parquet(patient_contact_path)
+        pl.scan_parquet(os.path.join(patient_contact_folder_path, "*.parquet"))
         .select([ID_COLUMN, PSEUDO_PATIENT_ID_COLUMN])
         .filter(pl.col(ID_COLUMN).is_in(contact_ids))
         .collect()
@@ -183,6 +192,82 @@ def load_note_patient_groups(
         pseudo_id = row.get(PSEUDO_PATIENT_ID_COLUMN)
         if pseudo_id is not None:
             note_to_group[note_id] = str(pseudo_id)
+    return note_to_group
+
+
+def _groups_from_raw_contact(
+    data_folder_path: str,
+    note_ids: list[str],
+) -> dict[str, str]:
+    """Group notes by the raw ``PatientContactId`` of the old_tables mapping.
+
+    A note mapped to several contacts takes the smallest contact ID, so the
+    grouping is deterministic. Keys are prefixed with ``contact:`` so they never
+    collide with the note-ID singleton keys.
+    """
+    mapping = load_note_contact_mapping(data_folder_path)
+    if mapping.is_empty():
+        logging.warning(
+            "Note → patient-contact mapping not found or empty — "
+            "every note becomes its own split group"
+        )
+        return {}
+    mapping = (
+        mapping.filter(pl.col("PatientNotitieId").is_in(note_ids))
+        .group_by("PatientNotitieId")
+        .agg(pl.col("PatientContactId").min())
+    )
+    return {
+        row["PatientNotitieId"]: f"contact:{row['PatientContactId']}"
+        for row in mapping.iter_rows(named=True)
+    }
+
+
+def load_note_patient_groups(
+    data_folder_path: str,
+    note_ids: list[str],
+) -> dict[str, str]:
+    """Map each note ID to a split group ID.
+
+    Groups by ``pseudo_patient_id`` when the patient-contact table from the
+    internal cleaning step is available; otherwise falls back to the raw
+    ``PatientContactId`` of the old_tables note → contact mapping. Unmapped
+    notes fall back to their own note_id as a singleton group so they are never
+    dropped from the split.
+    """
+    metadata_path = os.path.join(
+        data_folder_path,
+        OLD_TABLES_FOLDER_NAME,
+        FREE_TEXT_FOLDER_NAME,
+        ALL_NOTES_METADATA_PARQUET_FILE_NAME,
+    )
+    patient_contact_folder_path = os.path.join(
+        data_folder_path,
+        CLEANED_TABLES_FOLDER_NAME,
+        PATIENT_CONTACT_FOLDER_NAME,
+    )
+    has_patient_contact = os.path.isdir(patient_contact_folder_path) and any(
+        f.endswith(".parquet") for f in os.listdir(patient_contact_folder_path)
+    )
+
+    if os.path.exists(metadata_path) and has_patient_contact:
+        note_to_group = _groups_from_pseudo_patient(
+            metadata_path, patient_contact_folder_path, note_ids
+        )
+    else:
+        missing = [
+            path
+            for path, present in (
+                (metadata_path, os.path.exists(metadata_path)),
+                (patient_contact_folder_path, has_patient_contact),
+            )
+            if not present
+        ]
+        logging.warning(
+            f"Patient grouping input not found: {', '.join(missing)} — "
+            "grouping notes by raw patient contact instead of by patient"
+        )
+        note_to_group = _groups_from_raw_contact(data_folder_path, note_ids)
 
     for note_id in note_ids:
         if note_id not in note_to_group:
