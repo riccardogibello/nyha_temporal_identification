@@ -7,6 +7,8 @@ dependencies = [
     "numpy>=1.26,<2.0",
 ]
 name = "nyha_temporal_identification"
+license = "CC-BY-NC-SA-4.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12, <3.13"
 version = "0.1.0"
 
