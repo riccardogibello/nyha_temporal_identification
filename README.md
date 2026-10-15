@@ -373,6 +373,78 @@ notes, and writes one JSON per note to
 `temporal_status_prediction/inference_results_unseen/`, plus a
 `failsafe_audit_unseen.json` summary.
 
+### Inference with the released optimised extractor (skip optimisation)
+
+You can skip steps 2–5 (annotation, `run_dspy_pipeline`, baselines) and run
+inference directly with the optimised extractor released as a zip
+(`released_dspy.zip`). The zip mirrors the data-folder layout, with
+`temporal_status_prediction/` as its top-level folder:
+
+```
+temporal_status_prediction/
+├── checkpoints/pipeline_state.json      # checkpoint: best optimiser + config snapshot
+└── zs_complete/
+    └── optimised_bootstrap_spacy_only_windowed_context.json   # optimised DSPy program
+```
+
+Unzip it **from the data folder root**, so the files land where `main.py` looks
+for them:
+
+```bash
+cd <data>
+unzip /path/to/released_dspy.zip
+# → <data>/temporal_status_prediction/checkpoints/pipeline_state.json
+# → <data>/temporal_status_prediction/zs_complete/optimised_bootstrap_spacy_only_windowed_context.json
+```
+
+Then:
+
+1. Set up `<data>/old_tables/` and `<data>/pseudonymisation/` as described in
+   [Data folder setup](#data-folder-setup), and run `extract_nyha` with
+   `pseudonymise = true` (step 1). This produces the
+   `old_tables/FreeTextData/DT4H_*_processed.json` files that inference reads.
+2. Start a vLLM server for `RedHatAI/gemma-3-27b-it-quantized.w4a16` (step 3, or
+   `sbatch serve.sh` on Snellius).
+3. Run `annotate_training_nyha_mentions` with a config such as:
+
+```toml
+commands = ["annotate_training_nyha_mentions"]
+seed = 42
+use_identification = false                  # must be false
+use_windowed_classification_context = true  # must be true
+pseudonymise = true
+hf_token_file = "./.hf_token"
+failsafe_dropped_current = true             # recommended if the output feeds a NYHA masker
+failsafe_note_drop_policy = "balanced"
+
+[dspy_pipeline]
+task_lm = "RedHatAI/gemma-3-27b-it-quantized.w4a16"   # must match the checkpoint
+optimiser = "both"
+base_url = "http://<host>:8000/v1"          # or vllm_node_file = "logs/vllm_node_<JOB>.txt"
+num_threads = 16                            # <= vLLM --max-num-seqs
+max_tokens = 1536
+max_eval_tokens = 2500
+repetition_penalty = 1.1
+```
+
+Notes:
+
+- **`task_lm` must equal the model in the checkpoint**, otherwise the run stops
+  with a config-mismatch error. Other differences from the checkpoint config only
+  print a `[CHECKPOINT] Config differs on non-critical keys` warning.
+- `use_identification = false` and `use_windowed_classification_context = true`
+  select the released program file (`..._spacy_only_windowed_context.json`).
+  Any other combination looks for a file that is not in the zip.
+- Keep `pseudonymise = true` and `max_eval_tokens = 2500`. These are the
+  conditions under which the program was optimised.
+- You need neither gold annotations (`exported_annotations/`) nor the
+  `cleaned_tables/` whitelist. Without the whitelist, every extracted note is
+  processed.
+- Do not run `run_dspy_pipeline` in the same data folder. It would resume from
+  or overwrite the released checkpoint. Keep a copy of the zip.
+- **Privacy:** the program's few-shot demos contain excerpts of pseudonymised
+  clinical notes. Handle the zip under the same data agreement as the notes.
+
 ---
 
 ## Evaluating and comparing results
@@ -538,7 +610,9 @@ The notes are de-identified clinical records. **Never commit data.** The data
 folder lives outside the repository, and `.hf_token`, `data/` and `logs/` are
 gitignored. With `pseudonymise = true`, the text seen by the extractor and the LLM
 contains no deduce placeholders, but the substituted values are synthetic and the
-notes must still be handled under your institution's data agreement.
+notes must still be handled under your institution's data agreement. The same
+applies to saved DSPy programs (`optimised_*.json`, including the released
+extractor zip): their few-shot demos embed excerpts of the notes.
 
 ---
 
@@ -548,15 +622,14 @@ If you use this code, the pipeline design or the results in your work, please
 cite:
 
 ```bibtex
-@article{gibello_nyha_temporal_TODO,
-  title   = {TODO: paper title},
-  author  = {Gibello, Riccardo and TODO},
-  journal = {TODO: journal / conference},
-  year    = {TODO},
-  volume  = {TODO},
-  pages   = {TODO},
-  doi     = {TODO},
-  url     = {TODO}
+@inproceedings{gibello2026benchmarking,
+  title     = {Benchmarking Domain-Adapted Encoders against Open-Weight {LLMs} for Heart-Failure Severity Classification in {Dutch} Clinical Notes},
+  author    = {Gibello, Riccardo and Dormosh, Noman and Boonstra, Machteld J. and Caiani, Enrico G. and Asselbergs, Folkert W.},
+  booktitle = {Proceedings of the First Workshop on Evaluating {LLMs} for Specialized Domains (Eval4SD)},
+  note      = {Co-located with KONVENS 2026},
+  address   = {Hamburg, Germany},
+  month     = sep,
+  year      = {2026}
 }
 ```
 

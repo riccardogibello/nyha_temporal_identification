@@ -42,10 +42,12 @@ def load_dataset(
     is_inference: bool = False,
 ) -> List[NYHANote]:
     print(f"\n[INFO] Loading dataset from: {data_folder_path}")
-    # Firstly format all the annotated data into a consistent format to be fed to the pipeline
-    format_annotated_dataset(
-        data_folder_path,
-    )
+    if not is_inference:
+        # Format the annotated data into a consistent format to be fed to the pipeline.
+        # Inference reads the extracted notes only, so it needs no gold annotations.
+        format_annotated_dataset(
+            data_folder_path,
+        )
     if is_inference:
         base_json_folder_path = os.path.join(
             data_folder_path,

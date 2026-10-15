@@ -1,6 +1,7 @@
 """Tests for data_handling/data_loading.py — patient_grouped_split,
-load_note_patient_groups (incl. missing-table fallbacks), load_whitelisted_note_ids."""
+load_note_patient_groups (incl. missing-table fallbacks), load_whitelisted_note_ids, load_dataset (inference without annotations)."""
 
+import json
 import logging
 
 import polars as pl
@@ -10,6 +11,9 @@ from nyha_temporal_identification.constants import (
     ALL_NOTES_METADATA_PARQUET_FILE_NAME,
     CLEANED_TABLES_FOLDER_NAME,
     CONTACT_NOTE_TABLE_NAME,
+    DEIDENTIFIED_TEXT_COLUMN,
+    EXPORTED_ANNOTATIONS_FOLDER_NAME,
+    EXTRACTED_NYHA_MENTIONS_KEY,
     FREE_TEXT_FOLDER_NAME,
     ID_COLUMN,
     NOTES_DF_FIRST_FILTER_FILE_NAME,
@@ -20,6 +24,7 @@ from nyha_temporal_identification.constants import (
     PSEUDO_PATIENT_ID_COLUMN,
 )
 from nyha_temporal_identification.data_handling.data_loading import (
+    load_dataset,
     load_note_patient_groups,
     load_whitelisted_note_ids,
     patient_grouped_split,
@@ -226,3 +231,22 @@ def test_whitelisted_note_ids_missing_returns_none(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         assert load_whitelisted_note_ids(str(tmp_path)) is None
     assert NOTES_DF_FIRST_FILTER_FILE_NAME in caplog.text
+
+
+def test_load_dataset_inference_without_annotations(tmp_path):
+    # Only the extract_nyha output exists: no exported_annotations/ folder at all
+    free_text = tmp_path / OLD_TABLES_FOLDER_NAME / FREE_TEXT_FOLDER_NAME
+    free_text.mkdir(parents=True)
+    (free_text / "DT4H_UC3_Text_P1_tableoutput_processed.json").write_text(
+        json.dumps(
+            {
+                "1": {
+                    DEIDENTIFIED_TEXT_COLUMN: "Patient in NYHA II.",
+                    EXTRACTED_NYHA_MENTIONS_KEY: [],
+                }
+            }
+        )
+    )
+    docs = load_dataset(str(tmp_path), is_inference=True)
+    assert [d.old_note_id for d in docs] == ["1"]
+    assert not (tmp_path / EXPORTED_ANNOTATIONS_FOLDER_NAME).exists()
